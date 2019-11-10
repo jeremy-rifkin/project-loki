@@ -6,23 +6,11 @@
 
 template<class T> hashTable<T>::hashTable(int nBins) {
 	this->nBins = nBins;
-	keys = 0;
 	bins = new list<tableEntry<T>*>[nBins];
 }
 
 template<class T> hashTable<T>::~hashTable() {
 	delete bins;
-}
-
-template<class T> int hashTable<T>::hash(int key) {
-	#if _MULTIPLICATIVE_HASH
-	return key * 2654435761 % nBins;
-	#else
-	key = ((key >> 16) ^ key) * 0x45d9f3b;
-    key = ((key >> 16) ^ key) * 0x45d9f3b;
-    key = (key >> 16) ^ key;
-	return key % nBins;
-	#endif
 }
 
 template<class T> T* hashTable<T>::get(int key) {
@@ -36,6 +24,21 @@ template<class T> T* hashTable<T>::get(int key) {
 			content = node->getContent();
 			if(content->key == key)
 				return &content->value;
+		} while(node = node->getNext());
+	return null;
+}
+
+template<class T> tableEntry<T>* hashTable<T>::getEntry(int key) {
+	// Get bin based off of hash
+	list<tableEntry<T>*>* bin = &bins[hash(key)];
+	// Traverse bin looking for key
+	listNode<tableEntry<T>*>* node = bin->getHead();
+	tableEntry<T>* content;
+	if(node != null)
+		do {
+			content = node->getContent();
+			if(content->key == key)
+				return content;
 		} while(node = node->getNext());
 	return null;
 }
@@ -98,4 +101,15 @@ template<class T> list<int>* hashTable<T>::getKeys() {
 
 template<class T> int hashTable<T>::getNBins() {
 	return nBins;
+}
+
+template<class T> int hashTable<T>::hash(uint32_t key) {
+	#if _MULTIPLICATIVE_HASH
+	return key * 2654435761 % nBins;
+	#else
+	key = ((key >> 16) ^ key) * 0x45d9f3b;
+    key = ((key >> 16) ^ key) * 0x45d9f3b;
+    key = (key >> 16) ^ key;
+	return key % nBins;
+	#endif
 }

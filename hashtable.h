@@ -22,18 +22,18 @@ template<class T> class hashTable {
 private:
 	list<tableEntry<T>*>* bins;
 	int nBins;
-	int keys;
-	int hash(int key);
 public:
 	hashTable(int nBins);
 	~hashTable();
 	T* get(int key);
+	tableEntry<T>* getEntry(int key);
 	void set(int key, T value);
 	void remove(int key);
 	void clear();
 	list<tableEntry<T>*>* getBins();
 	list<int>* getKeys();
 	int getNBins();
+	int hash(uint32_t key);
 };
 
 #endif
