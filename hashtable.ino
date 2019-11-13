@@ -105,7 +105,8 @@ template<class T> int hashTable<T>::getNBins() {
 
 template<class T> int hashTable<T>::hash(uint32_t key) {
 	#if _MULTIPLICATIVE_HASH
-	return key * 2654435761 % nBins;
+	uint32_t p = key * 2654435761;
+	return p % ((uint32_t)nBins);
 	#else
 	key = ((key >> 16) ^ key) * 0x45d9f3b;
     key = ((key >> 16) ^ key) * 0x45d9f3b;
