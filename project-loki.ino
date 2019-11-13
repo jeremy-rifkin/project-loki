@@ -116,7 +116,7 @@ void clearBogusPoll() {
 }
 
 // Operation
-enum Operation { flood, trickle, changeall, force, eq, ddos, idle };
+enum Operation { flood, trickle, changeall, force, eq, dos, idle };
 
 Operation operation = idle;
 char operationMode = null;
@@ -127,7 +127,7 @@ int seqCounter;
 
 // Program config
 #define MAX_BUFFERED_PACKETS 50
-#define REPLY_TO_CLICKERS true
+#define REPLY_TO_CLICKERS false
 
 // Packet buffer for intercepted packets
 RingBufCPP<iClickerPacket, MAX_BUFFERED_PACKETS> RecvBuf;
@@ -163,7 +163,7 @@ void printHelpMessage() {
 		"uniform)");
 	Serial.println("│ force <ans>      Quickly resubmits all incoming answers as ans");
 	Serial.println("│ bounce           Causes the bar plot to bounce");
-	Serial.println("│ ddos             Attempts to flood base station with more than 1000 "
+	Serial.println("│ dos              Attempts to flood base station with more than 1000 "
 		"responses/sec");
 	Serial.println("└ eq               Evens out the histogram");
 }
@@ -394,10 +394,10 @@ void handleCommand() {
 			Serial.print(UBuf);
 			Serial.println("\"");
 		}
-	} else if(cEquals(UBuf, "ddos")) {
-		Serial.println("Starting ddos");
+	} else if(cEquals(UBuf, "dos")) {
+		Serial.println("Starting dos");
 		// Set operation
-		operation = ddos;
+		operation = dos;
 	} else if(cEquals(UBuf, "eq")) {
 		Serial.println("Starting equalization");
 		// Set operation
@@ -427,7 +427,7 @@ void recvPacketHandler(iClickerPacket *recvd) {
 
 void command_flood() {
 	// Flood the base station with a ton of answers
-	// Not DDOS level, but a lot
+	// Not DOS level, but a lot
 	// Sends about 200 responses per second
 	// ~20 per loop
 	char msg[50];
@@ -636,10 +636,10 @@ void command_eq() {
 			}
 }
 
-void command_ddos() {
+void command_dos() {
 	// Attempts to flood base station with more than 1000 submissions per second
 	Serial.println("Send any data over serial to abort.");
-	// Generate new random ID for ddos
+	// Generate new random ID for dos
 	uint8_t id[4];
 	iClickerEmulator::randomId(id);
 	int i;
@@ -657,8 +657,8 @@ void command_ddos() {
 	}
 	// we don't care about that input - clear it
 	while(Serial.available()) Serial.read();
-	// Inform user that ddos is finished
-	Serial.println("\nFinished ddos");
+	// Inform user that dos is finished
+	Serial.println("\nFinished dos");
 	operation = idle;
 	updatePoll(id, 'a');
 }
@@ -682,18 +682,11 @@ void setup() {
 	Serial.println("Started promiscouous.");
 	// Print help message
 	printHelpMessage();
-
-	//
-	//for(int i = 0; i < 5; i++) {
-	//	Serial.print(iClickerEmulator::answerChar(Answers[i]));
-	//	Serial.print(" - ");
-	//	Serial.println((int)Answers[i]);
-	//}
 }
 
 void loop() {
 	// Blink led
-	digitalWrite(LED, (LED_on = !LED_on) ? LOW : HIGH);
+	//digitalWrite(LED, (LED_on = !LED_on) ? LOW : HIGH);
 
 	// Process packets
 	handlePackets();
@@ -723,8 +716,8 @@ void loop() {
 			case eq:
 				command_eq();
 				break;
-			case ddos:
-				command_ddos();
+			case dos:
+				command_dos();
 				break;
 		}
 		// All operations involve transmission. Promiscouous mode needs to be restarted.
