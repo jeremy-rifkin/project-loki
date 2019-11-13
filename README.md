@@ -1,4 +1,4 @@
-# Loki
+# Project Loki
 
 The goal of this project was to create a system which exploits some of the design flaws in the
 iClicker classroom polling system such as flooding the base station with bogus answers and changing
