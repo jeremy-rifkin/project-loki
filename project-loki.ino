@@ -123,7 +123,7 @@ int seqCounter;
 
 // Program config
 #define MAX_BUFFERED_PACKETS 50
-#define REPLY_TO_CLICKERS false
+#define REPLY_TO_CLICKERS true
 
 // Packet buffer for intercepted packets
 RingBufCPP<iClickerPacket, MAX_BUFFERED_PACKETS> RecvBuf;
@@ -175,7 +175,7 @@ void handlePackets() {
 			snprintf(msg, sizeof(msg), "[%c][%02X%02X%02X%02X]  %c -> %c", r.type == PACKET_ANSWER ?
 				'a' : 'r', id[0], id[1], id[2], id[3], answer, operationMode);
 			Serial.println(msg);
-			Clicker.submitAnswer(id, Answers[operationMode - 'a']);
+			Clicker.submitAnswer(id, Answers[operationMode - 'A']);
 			updatePoll(id, operationMode);
 			// Promiscuous is re-engaged later in loop...
 		} else if(answer != 'P' && answer != 'X') {
@@ -371,7 +371,7 @@ void handleCommand() {
 		if(UBuf[0] == 'a' || UBuf[0] == 'b' || UBuf[0] == 'c' || UBuf[0] == 'd' ||
 				UBuf[0] == 'e' || UBuf[0] == 'u') {
 			operation = changeall;
-			operationMode = UBuf[0];
+			operationMode = cUpper(UBuf[0]);
 		} else {
 			Serial.print("[Error] Unknown changeall mode \"");
 			Serial.print(UBuf);
@@ -384,7 +384,7 @@ void handleCommand() {
 		if(UBuf[0] == 'a' || UBuf[0] == 'b' || UBuf[0] == 'c' || UBuf[0] == 'd' ||
 				UBuf[0] == 'e') {
 			operation = force;
-			operationMode = UBuf[0];
+			operationMode = cUpper(UBuf[0]);
 		} else {
 			Serial.print("[Error] Unknown flood mode \"");
 			Serial.print(UBuf);
@@ -541,8 +541,8 @@ void command_changeall() {
 	// Changes both student IDs and fake IDs
 	// Just do it all in one go. Hopefully don't miss too much in the process...
 	char msg[50];
-	if(operationMode >= 'a' && operationMode <= 'e') {
-		iClickerAnswer answer = Answers[operationMode - 'a'];
+	if(operationMode >= 'A' && operationMode <= 'E') {
+		iClickerAnswer answer = Answers[operationMode - 'A'];
 		list<int>* keys = responses.getKeys();
 		listNode<int>* node = keys->getHead();
 		uint32_t id;
@@ -554,13 +554,12 @@ void command_changeall() {
 				Clicker.submitAnswer(ida, answer);
 				// TODO: make message say oldAns -> newAns
 				snprintf(msg, sizeof(msg), "[->][%02X%02X%02X%02X]  %c", ida[0], ida[1], ida[2],
-					ida[3], iClickerEmulator::answerChar(answer));
+					ida[3], operationMode);
 				Serial.println(msg);
 				updatePoll(ida, operationMode);
 			} while(node = node->getNext());
 		clearBogusPoll();
 		id = baseBogusID;
-		Serial.println(nBogusIDs);
 		for(int i = 0; i < nBogusIDs; i++) {
 			expandBogusId(id++, ida);
 			Clicker.submitAnswer(ida, answer);
