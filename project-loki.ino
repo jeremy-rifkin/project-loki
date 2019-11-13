@@ -582,7 +582,7 @@ void command_changeall() {
 				expandId(id, ida);
 				Clicker.submitAnswer(ida, Answers[answer % 5]);
 				// TODO: make message say oldAns -> newAns
-				snprintf(msg, sizeof(msg), "[*][%02X%02X%02X%02X]  %c", ida[0], ida[1], ida[2],
+				snprintf(msg, sizeof(msg), "[->][%02X%02X%02X%02X]  %c", ida[0], ida[1], ida[2],
 					ida[3], iClickerEmulator::answerChar(Answers[answer % 5]));
 				Serial.println(msg);
 				updatePoll(ida, iClickerEmulator::answerChar(Answers[answer % 5]));
@@ -623,7 +623,7 @@ void command_eq() {
 				nBogusIDs++;
 				Clicker.submitAnswer(id, Answers[j]);
 				updatePollBogus(Answers[j]);
-				snprintf(msg, sizeof(msg), "[*][%02X%02X%02X%02X]  %c", id[0], id[1], id[2], id[3],
+				snprintf(msg, sizeof(msg), "[=][%02X%02X%02X%02X]  %c", id[0], id[1], id[2], id[3],
 					iClickerEmulator::answerChar(Answers[j]));
 				Serial.println(msg);
 			}
