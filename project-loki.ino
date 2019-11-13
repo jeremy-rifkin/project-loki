@@ -8,6 +8,9 @@
 #include "list.h"
 #include "hashtable.h"
 
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+#define MAX(a,b) ((a) > (b) ? (a) : (b))
+
 // iClicker channel id macro - useful for switch statements
 constexpr uint16_t _iid(char* c) {
 	return ((uint16_t)c[0]) << 8 | c[1];
@@ -15,7 +18,8 @@ constexpr uint16_t _iid(char* c) {
 
 // iClicker id macro
 uint32_t collapseId(uint8_t* id) {
-	// TODO: ignore last byte since it's dependant on first 3?
+	// TODO: ignore last byte since it's dependant on first 3? this value is used for the hash
+	// function after all...
 	return id[0] << 24 | id[1] << 16 | id[2] << 8 | id[3];
 }
 void expandId(uint32_t id, uint8_t* ida) {
@@ -171,7 +175,7 @@ void handlePackets() {
 		uint8_t* id = r.packet.answerPacket.id;
 		iClickerAnswer ans = r.packet.answerPacket.answer;
 		char answer = iClickerEmulator::answerChar(ans);
-		if(operation == force && answer != operationMode && answer != 'P') { // todo ignore X?
+		if(operation == force && answer != operationMode && answer != 'P') {
 			snprintf(msg, sizeof(msg), "[%c][%02X%02X%02X%02X]  %c -> %c", r.type == PACKET_ANSWER ?
 				'a' : 'r', id[0], id[1], id[2], id[3], answer, operationMode);
 			Serial.println(msg);
@@ -564,7 +568,6 @@ void command_changeall() {
 			expandBogusId(id++, ida);
 			Clicker.submitAnswer(ida, answer);
 			updatePollBogus(answer);
-			// TODO: make message say oldAns -> newAns
 			snprintf(msg, sizeof(msg), "[*>][%02X%02X%02X%02X]  %c", ida[0], ida[1], ida[2],
 				ida[3], iClickerEmulator::answerChar(answer));
 			Serial.println(msg);
@@ -593,7 +596,6 @@ void command_changeall() {
 		for(int i = 0; i < nBogusIDs; i++) {
 			expandBogusId(id++, ida);
 			Clicker.submitAnswer(ida, Answers[answer % 5]);
-			// TODO: make message say oldAns -> newAns
 			snprintf(msg, sizeof(msg), "[*>][%02X%02X%02X%02X]  %c", ida[0], ida[1], ida[2],
 				ida[3], iClickerEmulator::answerChar(Answers[answer % 5]));
 			Serial.println(msg);
@@ -609,22 +611,27 @@ void command_changeall() {
 void command_eq() {
 	// Attempts to equalize histogram using bogus answers
 	// About 160 responses per second max
+	// Get max response
 	int max = 0;
 	for(int i = 0; i < 5; i++)
 		if(poll[i] + bogusPoll[i] > max)
 			max = poll[i] + bogusPoll[i];
+	// Figure out how many responses to send per bin
+	int counts[5];
+	for(int i = 0; i < 5; i++)
+		counts[i] = max - poll[i] - bogusPoll[i];
+	// Submit bogus responses to equalize histogram
 	uint8_t id[4];
 	char msg[50];
-	// TODO: This is bad when histogram is equalized...
-	for(int i = 0; i < 4; i++)
-		for(int j = 0; j < 5; j++)
-			if(poll[j] + bogusPoll[j] < max) {
+	for(int i = 0; i < 5; i++)
+		if(counts[i] > 0)
+			for(int j = 0; j < MIN(counts[i], 4); j++) {
 				expandBogusId(bogusID++, id);
 				nBogusIDs++;
-				Clicker.submitAnswer(id, Answers[j]);
-				updatePollBogus(Answers[j]);
+				Clicker.submitAnswer(id, Answers[i]);
+				updatePollBogus(Answers[i]);
 				snprintf(msg, sizeof(msg), "[=][%02X%02X%02X%02X]  %c", id[0], id[1], id[2], id[3],
-					iClickerEmulator::answerChar(Answers[j]));
+					iClickerEmulator::answerChar(Answers[i]));
 				Serial.println(msg);
 			}
 }
