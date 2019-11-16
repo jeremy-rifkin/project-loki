@@ -13,7 +13,7 @@ The code is written such that the microprocessor does all the work and commands 
 board via Serial. Commands should end in a `\n` (which is default in the Arduino IDE).
 
 The code attempts to keep track of every answer that is submitted to the base station. The system
-is likely to miss a number of packets as it can't recieve and transmit at the same time. A more
+is likely to miss a number of packets as it can't receive and transmit at the same time. A more
 optimal solution would be to use 2 feathers: one for intercepting and one for transmitting.
 
 # License
