@@ -71,8 +71,8 @@ int poll[5];
 int nResponses;
 
 // Maintain hash map for unique IDs
-hashTable<char> responses(200);
-// Probably at most 300 legit responses
+#define ResponseBins 500 // Probably at most 300 legit responses... 500 should be good
+hashTable<char> responses(ResponseBins);
 
 // Track bogusResponses
 uint32_t baseBogusID = 0xBBAA11;
@@ -315,15 +315,7 @@ void handleCommand() {
 	} else if(cEquals(UBuf, "mapstatus")) {
 		// For debug purposes......
 		Serial.printf("nBins: %d\n", responses.getNBins());
-		list<tableEntry<char>*>* bins = responses.getBins();
-		int c = 0;
-		for(int i = 0, l = responses.getNBins(); i < l; i++) {
-			Serial.print(bins[i].getLength());
-			if(i == l - 1 || (c = (c + 1) % 20) == 0)
-				Serial.print("\n");
-			else
-				Serial.print(", ");
-		}
+		Serial.printf("loadFactor: %f\n", responses.getFilled() / responses.getNBins());
 	} else if(cEquals(UBuf, "reset")) {
 		Serial.println("Resetting poll");
 		// Reset poll status
@@ -547,52 +539,50 @@ void command_changeall() {
 	char msg[50];
 	if(operationMode >= 'A' && operationMode <= 'E') {
 		iClickerAnswer answer = Answers[operationMode - 'A'];
-		list<int>* keys = responses.getKeys();
-		listNode<int>* node = keys->getHead();
-		uint32_t id;
+		// Change legit responses
+		int keys[ResponseBins];
+		int nKeys = responses.getKeys(keys);
 		uint8_t ida[4];
-		if(node != null)
-			do {
-				id = node->getContent();
-				expandId(id, ida);
-				Clicker.submitAnswer(ida, answer);
-				// TODO: make message say oldAns -> newAns
-				snprintf(msg, sizeof(msg), "[->][%02X%02X%02X%02X]  %c", ida[0], ida[1], ida[2],
-					ida[3], operationMode);
-				Serial.println(msg);
-				updatePoll(ida, operationMode);
-			} while(node = node->getNext());
+		for(int i = 0; i < nKeys; i++) {
+			expandId(keys[i], ida);
+			Clicker.submitAnswer(ida, answer);
+			// TODO: make message say oldAns -> newAns
+			snprintf(msg, sizeof(msg), "[->][%02X%02X%02X%02X]  %c", ida[0], ida[1], ida[2],
+				ida[3], operationMode);
+			Serial.println(msg);
+			updatePoll(ida, operationMode);
+		}
+		// Change bogus responses
 		clearBogusPoll();
-		id = baseBogusID;
+		uint32_t id = baseBogusID;
 		for(int i = 0; i < nBogusIDs; i++) {
 			expandBogusId(id++, ida);
 			Clicker.submitAnswer(ida, answer);
 			updatePollBogus(answer);
 			snprintf(msg, sizeof(msg), "[*>][%02X%02X%02X%02X]  %c", ida[0], ida[1], ida[2],
-				ida[3], iClickerEmulator::answerChar(answer));
+				ida[3], operationMode);
 			Serial.println(msg);
 		}
 	} else {
 		// then uniform
 		int answer = 0;
-		list<int>* keys = responses.getKeys();
-		listNode<int>* node = keys->getHead();
-		int id;
+		// chaneg legit answers
+		int keys[ResponseBins];
+		int nKeys = responses.getKeys(keys);
 		uint8_t ida[4];
-		if(node != null)
-			do {
-				id = node->getContent();
-				expandId(id, ida);
-				Clicker.submitAnswer(ida, Answers[answer % 5]);
-				// TODO: make message say oldAns -> newAns
-				snprintf(msg, sizeof(msg), "[->][%02X%02X%02X%02X]  %c", ida[0], ida[1], ida[2],
-					ida[3], iClickerEmulator::answerChar(Answers[answer % 5]));
-				Serial.println(msg);
-				updatePoll(ida, iClickerEmulator::answerChar(Answers[answer % 5]));
-				answer++;
-			} while(node = node->getNext());
+		for(int i = 0; i < nKeys; i++) {
+			expandId(keys[i], ida);
+			Clicker.submitAnswer(ida, Answers[answer % 5]);
+			// TODO: make message say oldAns -> newAns
+			snprintf(msg, sizeof(msg), "[->][%02X%02X%02X%02X]  %c", ida[0], ida[1], ida[2],
+				ida[3], iClickerEmulator::answerChar(Answers[answer % 5]));
+			Serial.println(msg);
+			updatePoll(ida, iClickerEmulator::answerChar(Answers[answer % 5]));
+			answer++;
+		}
+		// change bogus answers
 		clearBogusPoll();
-		id = baseBogusID;
+		uint32_t id = baseBogusID;
 		for(int i = 0; i < nBogusIDs; i++) {
 			expandBogusId(id++, ida);
 			Clicker.submitAnswer(ida, Answers[answer % 5]);

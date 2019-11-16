@@ -1,4 +1,4 @@
-#include "hashtable.h"
+#include "hashTable.h"
 
 /*
 	Hash table implementation. Creates hash table of linked lists.
@@ -6,101 +6,93 @@
 
 template<class T> hashTable<T>::hashTable(int nBins) {
 	this->nBins = nBins;
-	bins = new list<tableEntry<T>*>[nBins];
+	filled = 0;
+	bins = new tableEntry<T>[nBins];
 }
 
 template<class T> hashTable<T>::~hashTable() {
 	delete bins;
 }
 
-template<class T> T* hashTable<T>::get(int key) {
-	// Get bin based off of hash
-	list<tableEntry<T>*>* bin = &bins[hash(key)];
-	// Traverse bin looking for key
-	listNode<tableEntry<T>*>* node = bin->getHead();
-	tableEntry<T>* content;
-	if(node != null)
-		do {
-			content = node->getContent();
-			if(content->key == key)
-				return &content->value;
-		} while(node = node->getNext());
+template<class T> T hashTable<T>::get(int key) {
+	int index = hash(key);
+	for(int i = 0; i < nBins; i++)
+		if(bins[i].state == empty)
+			break;
+		else if(bins[i].state == alloc && bins[i].key == key)
+			return bins[i].value;
+		else
+			index = (index + 1) % nBins;
 	return null;
 }
 
 template<class T> tableEntry<T>* hashTable<T>::getEntry(int key) {
-	// Get bin based off of hash
-	list<tableEntry<T>*>* bin = &bins[hash(key)];
-	// Traverse bin looking for key
-	listNode<tableEntry<T>*>* node = bin->getHead();
-	tableEntry<T>* content;
-	if(node != null)
-		do {
-			content = node->getContent();
-			if(content->key == key)
-				return content;
-		} while(node = node->getNext());
+	int index = hash(key);
+	for(int i = 0; i < nBins; i++)
+		if(bins[i].state == empty)
+			break;
+		else if(bins[i].state == alloc && bins[i].key == key)
+			return &bins[i];
+		else
+			index = (index + 1) % nBins;
 	return null;
 }
 
 template<class T> void hashTable<T>::set(int key, T value) {
-	// Get bin based off of hash
-	list<tableEntry<T>*>* bin = &bins[hash(key)];
-	// Check to see if key is already present
-	listNode<tableEntry<T>*>* node = bin->getHead();
-	tableEntry<T>* content;
-	if(node != null)
-		do {
-			content = node->getContent();
-			if(content->key == key) {
-				// If key is present just set new value
-				content->value = value;
-				return;
-			}
-		} while(node = node->getNext());
-	// Otherwise add new key
-	bin->add(new tableEntry<T>(key, value));
+	int index = hash(key);
+	for(int i = 0; i < nBins; i++)
+		if(bins[i].key == key || bins[i].state != alloc) {
+			if(bins[i].state != alloc)
+				filled++;
+			bins[i].state = alloc;
+			bins[i].key = key;
+			bins[i].value = value;
+			break;
+		} else
+			index = (index + 1) % nBins;
+	//throw "Key doesn't exist in hash table and there's no empty bins";
 }
 
 template<class T> void hashTable<T>::remove(int key) {
-	list<tableEntry<T>*>* bin = &bins[hash(key)];
-	listNode<tableEntry<T>*>* node = bin.getHead();
-	tableEntry<T>* content;
-	if(node != null)
-		do {
-			content = &node->getContent();
-			if(content->key == key) {
-				bin.remove(node);
-				return;
-			}
-		} while(node = node->getNext());
+	int index = hash(key);
+	for(int i = 0; i < nBins; i++)
+		if(bins[i].state == alloc && bins[i].key == key) {
+			bins[i].state = unalloc;
+			filled--;
+			// TODO: shift everything? Doesn't matter too much...
+			break;
+		} else
+			index = (index + 1) % nBins;
 }
 
 template<class T> void hashTable<T>::clear() {
 	for(int i = 0; i < nBins; i++)
-		bins[i].clear();
+		bins[i].state = empty;
+	filled = 0;
 }
 
-template<class T> list<tableEntry<T>*>* hashTable<T>::getBins() {
+template<class T> tableEntry<T>* hashTable<T>::getBins() {
 	return bins;
 }
 
-template<class T> list<int>* hashTable<T>::getKeys() {
-	list<int>* keys = new list<int>;
-	listNode<tableEntry<T>*>* node;
-	tableEntry<T>* content;
-	for(int i = 0; i < nBins; i++) {
-		node = bins[i].getHead();
-		if(node != null)
-			do
-				keys->add(node->getContent()->key);
-			while(node = node->getNext());
-	}
-	return keys;
+template<class T> int hashTable<T>::getKeys(int* arr) {
+	int j = 0;
+	for(int i = 0; i < nBins; i++)
+		if(bins[i].state == alloc)
+			arr[j++] = bins[i].key;
+	return j;
 }
 
 template<class T> int hashTable<T>::getNBins() {
 	return nBins;
+}
+
+template<class T> int hashTable<T>::getFilled() {
+	return filled;
+}
+
+template<class T> T hashTable<T>::operator[](int key) {
+	return get(key);
 }
 
 template<class T> int hashTable<T>::hash(uint32_t key) {
