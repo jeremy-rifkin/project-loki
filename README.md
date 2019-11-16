@@ -30,5 +30,5 @@ Also: I made this because I could and thought it would be interesting. Not becau
 extensive use of it myself it myself.
 
 I have three personal rules for using this: 1) I don't spoof attendance, 2) I don't use it to cheat
-an look at how other people are voting, and 3) I don't mess with other peoples' answers on polls
+by looking at how other people are voting, and 3) I don't mess with other peoples' answers on polls
 which will count for a grade.
