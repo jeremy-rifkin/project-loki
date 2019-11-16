@@ -32,6 +32,7 @@ public:
 	void remove(int key);
 	void clear();
 	tableEntry<T>* getBins();
+	int getWork(int key);
 	int getKeys(int* arr);
 	int getNBins();
 	int getFilled();

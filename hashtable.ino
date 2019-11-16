@@ -75,6 +75,20 @@ template<class T> tableEntry<T>* hashTable<T>::getBins() {
 	return bins;
 }
 
+template<class T> int hashTable<T>::getWork(int key) {
+	// Returns work required to get / set key
+	int w = 0;
+	int index = hash(key);
+	for(int i = 0; i < nBins; i++) {
+		w++;
+		if(bins[i].state == empty || (bins[i].state == alloc && bins[i].key == key))
+			break;
+		else
+			index = (index + 1) % nBins;
+	}
+	return w;
+}
+
 template<class T> int hashTable<T>::getKeys(int* arr) {
 	int j = 0;
 	for(int i = 0; i < nBins; i++)

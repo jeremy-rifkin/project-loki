@@ -315,7 +315,21 @@ void handleCommand() {
 	} else if(cEquals(UBuf, "mapstatus")) {
 		// For debug purposes......
 		Serial.printf("nBins: %d\n", responses.getNBins());
-		Serial.printf("loadFactor: %f\n", responses.getFilled() / responses.getNBins());
+		Serial.print("loadFactor: ");
+		Serial.print((float)responses.getFilled() / (float)responses.getNBins());
+		Serial.print("\n");
+		tableEntry<char>* bins = responses.getBins();
+		Serial.printf("========\n");
+		for(int i = 0; i < responses.getNBins(); i++) {
+			if(bins[i].state == alloc)
+				Serial.printf("%2d", responses.getWork(bins[i].key));
+			else
+				Serial.printf("%2d", 0);
+			if(i == responses.getNBins() - 1 || (i + 1) % 20 == 0)
+				Serial.printf("\n");
+			else
+				Serial.printf(" ");
+		}
 	} else if(cEquals(UBuf, "reset")) {
 		Serial.println("Resetting poll");
 		// Reset poll status
