@@ -116,7 +116,7 @@ void clearBogusPoll() {
 }
 
 // Operation
-enum Operation { flood, trickle, changeall, force, eq, dos, idle };
+enum Operation { flood, trickle, changeall, rotate, force, eq, dos, idle };
 
 Operation operation = idle;
 char operationMode = null;
@@ -161,8 +161,8 @@ void printHelpMessage() {
 		"uniform, seq");
 	Serial.println("│ changeall <ans>  Changes all submitted answers to the given answer (or "
 		"uniform)");
+	Serial.println("│ rotate           Changes all answers to A then B then C then ...");
 	Serial.println("│ force <ans>      Quickly resubmits all incoming answers as ans");
-	Serial.println("│ bounce           Causes the bar plot to bounce");
 	Serial.println("│ dos              Attempts to flood base station with more than 1000 "
 		"responses/sec");
 	Serial.println("└ eq               Evens out the histogram");
@@ -387,6 +387,11 @@ void handleCommand() {
 			Serial.print(UBuf);
 			Serial.println("\"");
 		}
+	} else if(cEquals(UBuf, "rotate")) {
+		Serial.println("Starting rotate");
+		operation = rotate;
+		operationMode = 'A';
+		operationCounter = 0;
 	} else if(cEquals(UBuf, "force")) {
 		Serial.println("Starting force");
 		// Extract parameter
@@ -612,6 +617,45 @@ void command_changeall() {
 	operation = idle;
 }
 
+void command_rotate() {
+	// Rotate the answers from a to b to c to ...
+	char msg[50];
+	if(operationCounter == 0) {
+		iClickerAnswer answer = Answers[operationMode - 'A'];
+		// Change legit responses
+		int keys[ResponseBins];
+		int nKeys = responses.getKeys(keys);
+		uint8_t ida[4];
+		for(int i = 0; i < nKeys; i++) {
+			expandId(keys[i], ida);
+			Clicker.submitAnswer(ida, answer);
+			// TODO: make message say oldAns -> newAns
+			snprintf(msg, sizeof(msg), "[->][%02X%02X%02X%02X]  %c", ida[0], ida[1], ida[2],
+				ida[3], operationMode);
+			Serial.println(msg);
+			updatePoll(ida, operationMode);
+		}
+		// Change bogus responses
+		clearBogusPoll();
+		uint32_t id = baseBogusID;
+		for(int i = 0; i < nBogusIDs; i++) {
+			expandBogusId(id++, ida);
+			Clicker.submitAnswer(ida, answer);
+			updatePollBogus(answer);
+			snprintf(msg, sizeof(msg), "[*>][%02X%02X%02X%02X]  %c", ida[0], ida[1], ida[2],
+				ida[3], operationMode);
+			Serial.println(msg);
+		}
+
+		operationMode++;
+		if(operationMode > 'E')
+			operationMode = 'A';
+		Serial.println("Finished rotate loop");
+	}
+	operationCounter++;
+	operationCounter %= 5;
+}
+
 void command_eq() {
 	// Attempts to equalize histogram using bogus answers
 	// About 160 responses per second max
@@ -716,6 +760,9 @@ void loop() {
 				break;
 			case changeall:
 				command_changeall();
+				break;
+			case rotate:
+				command_rotate();
 				break;
 			case eq:
 				command_eq();
