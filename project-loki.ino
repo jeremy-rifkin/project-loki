@@ -197,11 +197,15 @@ bool loadCommand() {
 	// Returns true if loaded successfully
 	int i = 0;
 	int c;
-	while(Serial.available() && i < SerialBufLen)
-		if((c = Serial.read()) == 0xa) // End char is 0xa == "\n"
-			break;
-		else
-			SerialBuf[i++] = c;
+	while(i < SerialBufLen) {
+		if(Serial.available()) {
+			if((c = Serial.read()) == 0xa) // End char is 0xa == "\n"
+				break;
+			else
+				SerialBuf[i++] = c;
+		} else
+			delay(100);
+	}
 	if(i <= SerialBufLen)
 		// If we didn't overrun the buffer, add the null terminator back in
 		SerialBuf[i] = 0x0;
